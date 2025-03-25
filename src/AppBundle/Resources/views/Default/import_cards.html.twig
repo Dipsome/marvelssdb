@@ -1,0 +1,18 @@
+{% extends 'AppBundle::layout.html.twig' %}
+
+{% block body %}
+    <h1>Import/Update Packs</h1>
+
+    {{ form_start(form, {'attr': {'enctype': 'multipart/form-data'}}) }}
+        {{ form_row(form.pack_file) }}
+        <button type="submit">Import/Update</button>
+    {{ form_end(form) }}
+
+    {% for message in app.flashes('success') %}
+        <div class="alert alert-success">{{ message }}</div>
+    {% endfor %}
+
+    {% for message in app.flashes('error') %}
+        <div class="alert alert-danger">{{ message }}</div>
+    {% endfor %}
+{% endblock %}

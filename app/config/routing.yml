@@ -43,3 +43,7 @@ oauth_server_auth_login_check:
     path:  /oauth/v2/auth_login_check
     defaults:
         _controller: AppBundle:Security:loginCheck
+
+import_cards:
+    path: /import_cards
+    defaults: { _controller: AppBundle:CardImport:importCards }
