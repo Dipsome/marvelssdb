@@ -25,6 +25,7 @@ class CardImportController extends AbstractController
         $entityManager = $this->getDoctrine()->getManager();
         $entityManager->clear();
         $duplicates = [];
+        $cardsToLink = [];
 
         $form = $this->createFormBuilder()
             ->add('pack_file', FileType::class, ['label' => 'Pack File (.json)', 'required' => true])
@@ -45,7 +46,7 @@ class CardImportController extends AbstractController
                 $data = $this->getDataFromString($jsonContent);
 
                 if (isset($data[0]['pack_code'])) {
-                    $this->importCardsFromJsonData($data, $entityManager, $duplicates);
+                    $this->importCardsFromJsonData($data, $entityManager, $duplicates, $cardsToLink);
                 } elseif (isset($data[0]['cgdb_id'])) {
                     $this->importPacksJsonData($data, $entityManager);
                 } elseif (isset($data[0]['card_set_type_code'])) {
@@ -57,6 +58,11 @@ class CardImportController extends AbstractController
                 if (!empty($duplicates)) {
                     $this->processDuplicates($duplicates, $entityManager);
                 }
+
+                // Debug: Check collected cards
+                $this->addFlash('debug', 'Cards to link: ' . json_encode($cardsToLink));
+
+                $this->linkCardsBySuffix($cardsToLink, $entityManager);
 
                 $entityManager->flush();
                 $this->addFlash('success', 'Data imported successfully into the database!');
@@ -117,7 +123,6 @@ class CardImportController extends AbstractController
             $cardset->setCode($setCode);
             $cardset->setName($setCode);
 
-            // Ensure a default Cardsettype exists
             $defaultCardsetType = $entityManager->getRepository('AppBundle\\Entity\\Cardsettype')
                 ->findOneBy(['code' => 'default']);
             if (!$defaultCardsetType) {
@@ -197,7 +202,7 @@ class CardImportController extends AbstractController
         }
     }
 
-    protected function importCardsFromJsonData(array $cardsData, $entityManager, array &$duplicates): void
+    protected function importCardsFromJsonData(array $cardsData, $entityManager, array &$duplicates, array &$cardsToLink): void
     {
         foreach ($cardsData as $data) {
             if (isset($data['duplicate_of']) && !isset($data['name'])) {
@@ -277,6 +282,23 @@ class CardImportController extends AbstractController
                     $card->setRealText($card->getText());
                 }
                 $entityManager->persist($card);
+                $entityManager->flush(); // Ensure card has an ID
+
+                $code = $data['code'];
+                $lastChar = substr($code, -1); // Get the last character
+                $isSuffixCard = in_array($lastChar, ['a', 'b']);
+                $hasBackLink = isset($data['back_link']);
+
+                // Debug: Log suffix check
+                $this->addFlash('info', "Checking card: $code, Last char: $lastChar, Is suffix: " . ($isSuffixCard ? 'yes' : 'no') . ", Has back_link: " . ($hasBackLink ? 'yes' : 'no'));
+
+                if ($isSuffixCard || $hasBackLink) {
+                    $cardsToLink[] = [
+                        'card' => $card,
+                        'code' => $code,
+                        'back_link' => $data['back_link'] ?? null
+                    ];
+                }
             }
         }
     }
@@ -304,23 +326,25 @@ class CardImportController extends AbstractController
             }
 
             $newCard = new Card();
-            $newCard->setIsUnique(false);
-            $newCard->setHidden(false);
-            $newCard->setPermanent(false);
-            $newCard->setDoubleSided(false);
-            $newCard->setAttackStar(false);
-            $newCard->setThwartStar(false);
-            $newCard->setDefenseStar(false);
-            $newCard->setHealthStar(false);
-            $newCard->setRecoverStar(false);
-            $newCard->setSchemeStar(false);
-            $newCard->setBoostStar(false);
-            $newCard->setThreatStar(false);
-            $newCard->setEscalationThreatStar(false);
-            $newCard->setBaseThreatFixed(false);
-            $newCard->setEscalationThreatFixed(false);
-            $newCard->setThreatFixed(false);
-            $newCard->setHealthPerHero(false);
+            // Booleans with default 0 when not mentioned
+            $newCard->setIsUnique($duplicateData['is_unique'] ?? 0);
+            $newCard->setHidden($duplicateData['hidden'] ?? 0);
+            $newCard->setPermanent($duplicateData['permanent'] ?? 0);
+            // Booleans with default null when not mentioned
+            $newCard->setDoubleSided($duplicateData['double_sided'] ?? null);
+            $newCard->setAttackStar($duplicateData['attack_star'] ?? null);
+            $newCard->setThwartStar($duplicateData['thwart_star'] ?? null);
+            $newCard->setDefenseStar($duplicateData['defense_star'] ?? null);
+            $newCard->setHealthStar($duplicateData['health_star'] ?? null);
+            $newCard->setRecoverStar($duplicateData['recover_star'] ?? null);
+            $newCard->setSchemeStar($duplicateData['scheme_star'] ?? null);
+            $newCard->setBoostStar($duplicateData['boost_star'] ?? null);
+            $newCard->setThreatStar($duplicateData['threat_star'] ?? null);
+            $newCard->setEscalationThreatStar($duplicateData['escalation_threat_star'] ?? null);
+            $newCard->setBaseThreatFixed($duplicateData['base_threat_fixed'] ?? null);
+            $newCard->setEscalationThreatFixed($duplicateData['escalation_threat_fixed'] ?? null);
+            $newCard->setThreatFixed($duplicateData['threat_fixed'] ?? null);
+            $newCard->setHealthPerHero($duplicateData['health_per_hero'] ?? null);
 
             $this->copyKeyToEntity($newCard, 'AppBundle\\Entity\\Card', $duplicateData, 'code', true, $entityManager);
             $this->copyKeyToEntity($newCard, 'AppBundle\\Entity\\Card', $duplicateData, 'position', true, $entityManager);
@@ -361,6 +385,60 @@ class CardImportController extends AbstractController
 
             $newCard->setDuplicateOf($duplicateOf);
             $entityManager->persist($newCard);
+        }
+    }
+
+    protected function linkCardsBySuffix(array $cardsToLink, $entityManager): void
+    {
+        $processed = [];
+        foreach ($cardsToLink as $index => $entry) {
+            $card = $entry['card'];
+            $code = $entry['code'];
+            $backLink = $entry['back_link'];
+
+            if (in_array($code, $processed)) {
+                continue; // Skip if already processed
+            }
+
+            if ($backLink) {
+                $linkedCard = $entityManager->getRepository('AppBundle\\Entity\\Card')
+                    ->findOneBy(['code' => $backLink]);
+                if ($linkedCard) {
+                    $card->setLinkedTo($linkedCard); // Unidirectional: a -> b
+                    $entityManager->persist($card);
+                    $processed[] = $code;
+                    $this->addFlash('info', "Linked $code to $backLink via back_link");
+                } else {
+                    $this->addFlash('info', "No linked card found for back_link: $backLink");
+                }
+            } else {
+                $lastChar = substr($code, -1);
+                if (in_array($lastChar, ['a', 'b'])) {
+                    $baseCode = substr($code, 0, -1);
+                    $targetSuffix = ($lastChar === 'a') ? 'b' : 'a';
+                    $targetCode = $baseCode . $targetSuffix;
+
+                    $linkedCard = $entityManager->getRepository('AppBundle\\Entity\\Card')
+                        ->findOneBy(['code' => $targetCode]);
+                    if ($linkedCard && $lastChar === 'a') { // Only link if suffix is 'a'
+                        $card->setLinkedTo($linkedCard); // Unidirectional: a -> b
+                        $entityManager->persist($card);
+                        $processed[] = $code;
+                        $this->addFlash('info', "Linked $code to $targetCode via suffix");
+                    } else if ($lastChar === 'b') {
+                        $this->addFlash('info', "Skipped linking $code to $targetCode (b does not link back)");
+                    } else {
+                        $this->addFlash('info', "No linked card found for $code -> $targetCode");
+                    }
+                }
+            }
+
+            // Batch flush and clear every 50 links
+            if ($index % 50 === 0 && $index > 0) {
+                $entityManager->flush();
+                $entityManager->clear();
+                $this->addFlash('info', "Linked $index cards, cleared memory");
+            }
         }
     }
 
@@ -444,18 +522,25 @@ class CardImportController extends AbstractController
 
     protected function copyKeyToEntity($entity, string $entityName, array $data, string $key, bool $isMandatory = true, $entityManager): void
     {
-        $booleanFields = [
-            'is_unique', 'hidden', 'permanent', 'double_sided', 'attack_star', 'thwart_star',
-            'defense_star', 'health_star', 'recover_star', 'scheme_star', 'boost_star',
-            'threat_star', 'escalation_threat_star', 'base_threat_fixed', 'escalation_threat_fixed',
-            'threat_fixed', 'health_per_hero'
+        $booleanFieldsWithDefaultZero = ['is_unique', 'hidden', 'permanent'];
+        $booleanFieldsWithDefaultNull = [
+            'double_sided', 'attack_star', 'thwart_star', 'defense_star', 'health_star',
+            'recover_star', 'scheme_star', 'boost_star', 'threat_star', 'escalation_threat_star',
+            'base_threat_fixed', 'escalation_threat_fixed', 'threat_fixed', 'health_per_hero'
         ];
 
         if (!isset($data[$key])) {
             if ($isMandatory) {
                 throw new \Exception("Missing key [$key] in " . json_encode($data));
             }
-            $value = in_array($key, $booleanFields) ? false : null;
+            // Set default based on boolean field type
+            if (in_array($key, $booleanFieldsWithDefaultZero)) {
+                $value = 0; // Default to false (0) for is_unique, hidden, permanent
+            } elseif (in_array($key, $booleanFieldsWithDefaultNull)) {
+                $value = null; // Default to null for other booleans
+            } else {
+                $value = null; // Default to null for non-boolean optional fields
+            }
         } else {
             $value = $data[$key];
         }

@@ -4,7 +4,8 @@ security:
 
     role_hierarchy:
         ROLE_ADMIN:       ROLE_USER
-        ROLE_SUPER_ADMIN: ROLE_ADMIN
+        ROLE_CREATOR:     ROLE_USER
+        ROLE_SUPER_ADMIN: [ROLE_ADMIN, ROLE_CREATOR]
 
     providers:
         fos_userbundle:
@@ -45,10 +46,10 @@ security:
             anonymous:    true
             remember_me:
                 secret:   "%secret%"
-                lifetime: 31536000 # 365 jours en secondes
+                lifetime: 31536000
                 path:     /
-                domain:   ~ # Prend la valeur par défaut du domaine courant depuis $_SERVER
-            
+                domain:   ~
+
     access_control:
         - { path: ^/login$, role: IS_AUTHENTICATED_ANONYMOUSLY }
         - { path: ^/register, role: IS_AUTHENTICATED_ANONYMOUSLY }
@@ -64,3 +65,5 @@ security:
         - { path: ^/decks, role: ROLE_USER }
         - { path: ^/collection, role: ROLE_USER }
         - { path: ^/user/, role: ROLE_USER }
+        - { path: ^/cards/add, roles: [ROLE_CREATOR, ROLE_ADMIN] }
+        - { path: ^/cards/update, roles: [ROLE_CREATOR, ROLE_ADMIN] }

@@ -45,5 +45,14 @@ oauth_server_auth_login_check:
         _controller: AppBundle:Security:loginCheck
 
 import_cards:
-    path: /import_cards
+    path: /cards/add
     defaults: { _controller: AppBundle:CardImport:importCards }
+    requirements:
+        _method: GET|POST
+
+update_cards:
+    path: /cards/update/{code}
+    defaults: { _controller: AppBundle:CardUpdate:updateCard }
+    requirements:
+        code: "[a-zA-Z0-9]+"
+        _method: GET|POST

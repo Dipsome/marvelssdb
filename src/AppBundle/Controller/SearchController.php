@@ -284,163 +284,171 @@ class SearchController extends Controller
 
 	public function displayAction($q, $view="card", $decks="all", $sort, $page=1, $pagetitle="", $meta="", Request $request)
 	{
+    	$response = new Response();
+    	$response->setPublic();
+    	$response->setMaxAge($this->container->getParameter('cache_expiration'));
 
-		$response = new Response();
-		$response->setPublic();
-		$response->setMaxAge($this->container->getParameter('cache_expiration'));
+    	static $availability = [];
 
-		static $availability = [];
+    	$show_spoilers = 1;
+    	if ($request->cookies->get('spoilers') && $request->cookies->get('spoilers') == "show") {
+    	    $show_spoilers = 1;
+    	}
 
-		$show_spoilers = 1;
-		if ($request->cookies->get('spoilers') && $request->cookies->get('spoilers') == "show"){
-			$show_spoilers = 1;
-		}
+    	$cards = [];
+    	$first = 0;
+    	$last = 0;
+    	$pagination = '';
 
+    	$pagesizes = array(
+    	    'list' => 240,
+    	    'spoiler' => 240,
+    	    'card' => 20,
+    	    'scan' => 20,
+    	    'short' => 1000,
+    	);
+    	$includeReviews = FALSE;
 
-		$cards = [];
-		$first = 0;
-		$last = 0;
-		$pagination = '';
+    	if (!array_key_exists($view, $pagesizes)) {
+    	    $view = 'list';
+    	}
 
-		$pagesizes = array(
-			'list' => 240,
-			'spoiler' => 240,
-			'card' => 20,
-			'scan' => 20,
-			'short' => 1000,
-		);
-		$includeReviews = FALSE;
+    	$conditions = $this->get('cards_data')->syntax($q);
+    	$conditions = $this->get('cards_data')->validateConditions($conditions);
+    	$q = $this->get('cards_data')->buildQueryFromConditions($conditions);
+    	$include_encounter = ($decks == "encounter") ? "encounter" : ($decks == "player" ? false : true);
+    	$spoiler_protection = true;
 
-		if(!array_key_exists($view, $pagesizes))
-		{
-			$view = 'list';
-		}
+    	// Handle single card code (e.g., 10011a, 690019)
+    	if (preg_match('/^\d{5,6}[a-z]?$/', $q)) {
+        	$card = $this->getDoctrine()->getRepository('AppBundle:Card')->findOneBy(['code' => $q]);
+        	if ($card) {
+        	    $cardinfo = $this->get('cards_data')->getCardInfo($card, false, $spoiler_protection);
+        	    $pack = $card->getPack();
+        	    if (empty($availability[$pack->getCode()])) {
+        	        $availability[$pack->getCode()] = $pack->getDateRelease() && $pack->getDateRelease() <= new \DateTime();
+        	    }
+        	    $cardinfo['available'] = $availability[$pack->getCode()];
+        	    if (isset($cardinfo['linked_card'])) {
+            	    $cardinfo['linked_card']['available'] = $availability[$pack->getCode()];
+            	}
+            	// Add reviews, faqs, and related for single-card view
+            	$includeReviews = TRUE;
+            	if ($includeReviews) {
+            	    $cardinfo['reviews'] = $this->get('cards_data')->get_reviews($card);
+            	    $cardinfo['faqs'] = $this->get('cards_data')->get_faqs($card);
+            	    $cardinfo['related'] = $this->get('cards_data')->get_related($card);
+            	}
+            	$cards[] = $cardinfo;
+            	$view = 'card';
+            	$pagination = $this->setnavigation($card, $q, $view, $sort, $decks);
+            	$first = 1;
+            	$last = 1;
+        	} else {
+        	    error_log("Card not found for code: $q");
+        	}
+    	} else {
+        	// Multi-card search logic
+        	if ($q && $rows = $this->get('cards_data')->get_search_rows($conditions, $sort, false, $include_encounter)) {
+            	if (count($rows) == 1) {
+            	    $view = 'card';
+            	    $includeReviews = TRUE;
+            	}
 
-		$conditions = $this->get('cards_data')->syntax($q);
-		$conditions = $this->get('cards_data')->validateConditions($conditions);
+            	if (empty($pagetitle)) {
+                	if (count($conditions) == 1 && count($conditions[0]) == 3 && $conditions[0][1] == ":") {
+                	    if ($conditions[0][0] == "e") {
+                	        $pack = $this->getDoctrine()->getRepository('AppBundle:Pack')->findOneBy(["code" => $conditions[0][2]]);
+                	        if ($pack) $pagetitle = $pack->getName();
+                	    }
+                	}
+            	}
 
-		// reconstruction de la bonne chaine de recherche pour affichage
-		$q = $this->get('cards_data')->buildQueryFromConditions($conditions);
-		$include_encounter = false;
-		$include_encounter = true;
-		$spoiler_protection = true;
+            	$nb_per_page = $pagesizes[$view];
+            	$first = $nb_per_page * ($page - 1);
+            	if ($first > count($rows)) {
+            	    $page = 1;
+            	    $first = 0;
+            	}
+            	$last = $first + $nb_per_page;
 
-		if ($decks == "encounter"){
-			$include_encounter = "encounter";
-		}
-		if ($decks == "player"){
-			$include_encounter = false;
-		}
+            	for ($rowindex = $first; $rowindex < $last && $rowindex < count($rows); $rowindex++) {
+            	    $card = $rows[$rowindex];
+            	    $pack = $card->getPack();
+            	    $cardinfo = $this->get('cards_data')->getCardInfo($card, false, $spoiler_protection);
+            	    if (empty($availability[$pack->getCode()])) {
+            	        $availability[$pack->getCode()] = $pack->getDateRelease() && $pack->getDateRelease() <= new \DateTime();
+            	    }
+            	    $cardinfo['available'] = $availability[$pack->getCode()];
+            	    if (isset($cardinfo['linked_card'])) {
+            	        $cardinfo['linked_card']['available'] = $availability[$pack->getCode()];
+            	    }
+            	    if ($includeReviews) {
+            	        $cardinfo['reviews'] = $this->get('cards_data')->get_reviews($card);
+            	        $cardinfo['faqs'] = $this->get('cards_data')->get_faqs($card);
+            	        $cardinfo['related'] = $this->get('cards_data')->get_related($card);
+            	    }
+            	    $cards[] = $cardinfo;
+            	}
 
-		if($q && $rows = $this->get('cards_data')->get_search_rows($conditions, $sort, false, $include_encounter))
-		{
-			if(count($rows) == 1)
-			{
-				$view = 'card';
-				$includeReviews = TRUE;
-			}
+            	$first += 1;
 
-			if($pagetitle == "") {
-        		if(count($conditions) == 1 && count($conditions[0]) == 3 && $conditions[0][1] == ":") {
-        			if($conditions[0][0] == "e") {
-        				$pack = $this->getDoctrine()->getRepository('AppBundle:Pack')->findOneBy(array("code" => $conditions[0][2]));
-        				if($pack) $pagetitle = $pack->getName();
-        			}
-        		}
-			}
+            	if (count($rows)) {
+            	    if (count($rows) == 1) {
+            	        $pagination = $this->setnavigation($card, $q, $view, $sort, $decks);
+           	        } else {
+            	        $pagination = $this->pagination($nb_per_page, count($rows), $first, $q, $view, $sort, $decks);
+            	    }
+            	}
 
-			// calcul de la pagination
-			$nb_per_page = $pagesizes[$view];
-			$first = $nb_per_page * ($page - 1);
-			if($first > count($rows)) {
-				$page = 1;
-				$first = 0;
-			}
-			$last = $first + $nb_per_page;
+            	if (count($cards) && $view == "short") {
+            	    $sortfields = array(
+            	        'set' => 'pack_name',
+             	        'name' => 'name',
+                	    'faction' => 'faction_name',
+                	    'type' => 'type_name',
+                	    'cost' => 'cost',
+                	    'strength' => 'strength',
+                	);
 
-			// data à passer à la view
-			for($rowindex = $first; $rowindex < $last && $rowindex < count($rows); $rowindex++) {
-				$card = $rows[$rowindex];
-				$pack = $card->getPack();
-				$cardinfo = $this->get('cards_data')->getCardInfo($card, false, $spoiler_protection);
-				if(empty($availability[$pack->getCode()])) {
-					$availability[$pack->getCode()] = false;
-					if($pack->getDateRelease() && $pack->getDateRelease() <= new \DateTime()) $availability[$pack->getCode()] = true;
-				}
-				$cardinfo['available'] = $availability[$pack->getCode()];
-				if (isset($cardinfo['linked_card'])){
-					$cardinfo['linked_card']['available'] = $availability[$pack->getCode()];
-				}
-				if($includeReviews) {
-				    $cardinfo['reviews'] = $this->get('cards_data')->get_reviews($card);
-				    $cardinfo['faqs'] = $this->get('cards_data')->get_faqs($card);
-				    //$cardinfo['questions'] = $this->get('cards_data')->get_questions($card);
-				    $cardinfo['related'] = $this->get('cards_data')->get_related($card);
-				}
-				$cards[] = $cardinfo;
-			}
+                	$brokenlist = [];
+                	for ($i = 0; $i < count($cards); $i++) {
+                	    $val = $cards[$i][$sortfields[$sort]];
+                	    if ($sort == "name") $val = substr($val, 0, 1);
+                	    if (!isset($brokenlist[$val])) $brokenlist[$val] = [];
+                	    array_push($brokenlist[$val], $cards[$i]);
+                	}
+            	    $cards = $brokenlist;
+            	}
+        	}
+    	}
 
-			$first += 1;
+    	$searchbar = $this->renderView('AppBundle:Search:searchbar.html.twig', array(
+    	    "q" => $q,
+    	    "view" => $view,
+    	    "decks" => $decks,
+    	    "sort" => $sort,
+    	    "show_spoilers" => $show_spoilers
+    	));
 
-			// si on a des cartes on affiche une bande de navigation/pagination
-			if(count($rows)) {
-				if(count($rows) == 1) {
-					$pagination = $this->setnavigation($card, $q, $view, $sort, $decks);
-				} else {
-					$pagination = $this->pagination($nb_per_page, count($rows), $first, $q, $view, $sort, $decks);
-				}
-			}
+    	if (empty($pagetitle)) {
+    	    $pagetitle = $q;
+    	}
 
-			// si on est en vue "short" on casse la liste par tri
-			if(count($cards) && $view == "short") {
-
-				$sortfields = array(
-					'set' => 'pack_name',
-					'name' => 'name',
-					'faction' => 'faction_name',
-					'type' => 'type_name',
-					'cost' => 'cost',
-					'strength' => 'strength',
-				);
-
-				$brokenlist = [];
-				for($i=0; $i<count($cards); $i++) {
-					$val = $cards[$i][$sortfields[$sort]];
-					if($sort == "name") $val = substr($val, 0, 1);
-					if(!isset($brokenlist[$val])) $brokenlist[$val] = [];
-					array_push($brokenlist[$val], $cards[$i]);
-				}
-				$cards = $brokenlist;
-			}
-		}
-
-		$searchbar = $this->renderView('AppBundle:Search:searchbar.html.twig', array(
-			"q" => $q,
-			"view" => $view,
-			"decks" => $decks,
-			"sort" => $sort,
-			"show_spoilers" => $show_spoilers
-		));
-
-		if(empty($pagetitle)) {
-			$pagetitle = $q;
-		}
-
-		// attention si $s="short", $cards est un tableau à 2 niveaux au lieu de 1 seul
-		return $this->render('AppBundle:Search:display-'.$view.'.html.twig', array(
-			"view" => $view,
-			"decks" => $decks,
-			"sort" => $sort,
-			"cards" => $cards,
-			"first"=> $first,
-			"last" => $last,
-			"searchbar" => $searchbar,
-			"pagination" => $pagination,
-			"pagetitle" => $pagetitle,
-			"metadescription" => $meta,
-			"includeReviews" => $includeReviews,
-			"show_spoilers" => $show_spoilers
-		), $response);
+    	return $this->render('AppBundle:Search:display-'.$view.'.html.twig', array(
+    	    "view" => $view,
+    	    "decks" => $decks,
+    	    "sort" => $sort,
+    	    "cards" => $cards,
+    	    "first" => $first,
+    	    "last" => $last,
+    	    "searchbar" => $searchbar,
+    	    "pagination" => $pagination,
+    	    "pagetitle" => $pagetitle,
+    	    "metadescription" => $meta,
+    	    "includeReviews" => $includeReviews,
+    	    "show_spoilers" => $show_spoilers
+    	), $response);
 	}
 
 	public function setnavigation($card, $q, $view, $sort, $encounter)
