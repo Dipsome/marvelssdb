@@ -1,15 +1,21 @@
 AppBundle\Entity\PackOwnership:
-    type: entity
-    table: pack_ownership
+  type: entity
+  table: pack_ownership
+  id:
     id:
-        id:
-            type: integer
-            generator:
-                strategy: AUTO
-    fields:
-        userId:
-            type: integer
-            nullable: false
-        packId:
-            type: integer
-            nullable: false
+      type: integer
+      generator:
+        strategy: AUTO
+  manyToOne:
+    user:
+      targetEntity: AppBundle\Entity\User
+      joinColumn:
+        name: user_id
+        referencedColumnName: id
+        nullable: false
+    pack:
+      targetEntity: AppBundle\Entity\Pack
+      joinColumn:
+        name: pack_id
+        referencedColumnName: id
+        nullable: false

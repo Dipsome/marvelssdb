@@ -14,6 +14,7 @@ use AppBundle\Entity\Card;
 use AppBundle\Entity\Faction;
 use AppBundle\Entity\Type;
 use AppBundle\Entity\Cardsettype;
+use AppBundle\Entity\PackOwnership;
 
 class CardImportController extends AbstractController
 {
@@ -75,48 +76,72 @@ class CardImportController extends AbstractController
         ]);
     }
 
-    private function ensurePackExists(string $packCode, $entityManager): Pack
-    {
-        $pack = $entityManager->getRepository('AppBundle\\Entity\\Pack')
-            ->findOneBy(['code' => $packCode]);
+    private function ensurePackExists($packCode, $entityManager)
+{
+    $pack = $entityManager->getRepository('AppBundle\\Entity\\Pack')
+        ->findOneBy(['code' => $packCode]);
 
-        if ($pack) {
-            // Pack exists, check ownership for ROLE_CREATOR
-            $user = $this->getUser();
-            if ($user && $this->isGranted('ROLE_CREATOR') && !$this->isGranted('ROLE_ADMIN')) {
-                $ownership = $entityManager->getRepository('AppBundle\\Entity\\PackOwnership')
-                    ->findOneBy(['user' => $user, 'pack' => $pack]);
-                if (!$ownership) {
-                    throw new \Exception("You do not have ownership of pack [$packCode] and cannot modify it.");
-                }
+    if ($pack) {
+        $user = $this->getUser();
+        if ($user && $this->isGranted('ROLE_CREATOR') && !$this->isGranted('ROLE_ADMIN')) {
+            // Ensure the user is managed by fetching it from the database
+            $managedUser = $entityManager->getRepository('AppBundle\\Entity\\User')
+                ->findOneBy(['id' => $user->getId()]);
+            if (!$managedUser) {
+                throw new \Exception("Authenticated user {$user->getUsername()} (ID: {$user->getId()}) not found in database.");
             }
-            // ROLE_ADMIN can proceed without ownership check
-        } else {
-            // Pack doesn't exist, create it
-            $pack = new Pack();
-            $pack->setCode($packCode);
-            $pack->setName($packCode);
-            $pack->setPosition(1);
-            $pack->setSize(1);
-            $pack->setDateCreation(new \DateTime());
-            $pack->setDateUpdate(new \DateTime());
-            $entityManager->persist($pack);
-            $entityManager->flush(); // Flush to assign an ID to the pack
-
-            // Link PackOwnership for ROLE_CREATOR
-            $user = $this->getUser();
-            if ($user && $this->isGranted('ROLE_CREATOR') && !$this->isGranted('ROLE_ADMIN')) {
-                $packOwnership = new PackOwnership();
-                $packOwnership->setUser($user);
-                $packOwnership->setPack($pack);
-                $entityManager->persist($packOwnership);
-                $entityManager->flush(); // Save the PackOwnership
-                $this->addFlash('info', "PackOwnership created for pack [$packCode] and user [{$user->getId()}]");
+            $ownership = $entityManager->getRepository('AppBundle\\Entity\\PackOwnership')
+                ->findOneBy(['user' => $managedUser, 'pack' => $pack]);
+            if (!$ownership) {
+                throw new \Exception("You do not have ownership of pack [$packCode] and cannot modify it.");
             }
         }
+    } else {
+        $pack = new Pack();
+        $pack->setCode($packCode);
+        $pack->setName($packCode);
+        $pack->setPosition(1);
+        $pack->setSize(1);
+        $pack->setDateCreation(new \DateTime());
+        $pack->setDateUpdate(new \DateTime());
+        $entityManager->persist($pack);
+        $entityManager->flush();
+        $this->addFlash('debug', "New pack created with ID: " . $pack->getId());
 
-        return $pack;
+        $user = $this->getUser();
+        if ($user) {
+            $this->addFlash('debug', "User authenticated: ID {$user->getId()}, Roles: " . implode(', ', $user->getRoles()));
+            if ($this->isGranted('ROLE_CREATOR') && !$this->isGranted('ROLE_ADMIN')) {
+                try {
+                    // Fetch the managed user from the database
+                    $managedUser = $entityManager->getRepository('AppBundle\\Entity\\User')
+                        ->findOneBy(['id' => $user->getId()]);
+                    if (!$managedUser) {
+                        throw new \Exception("Authenticated user {$user->getUsername()} (ID: {$user->getId()}) not found in database.");
+                    }
+
+                    $packOwnership = new PackOwnership();
+                    $packOwnership->setUser($managedUser);
+                    $packOwnership->setPack($pack);
+                    $entityManager->persist($packOwnership);
+                    $entityManager->flush();
+                    $this->addFlash('info', "PackOwnership created for pack [$packCode] and user [{$managedUser->getId()}] with ID: " . $packOwnership->getId());
+                } catch (\Exception $e) {
+                    $this->addFlash('error', "Failed to create PackOwnership: " . $e->getMessage());
+                    if (!$entityManager->isOpen()) {
+                        $entityManager = $this->getDoctrine()->getManager();
+                    }
+                }
+            } else {
+                $this->addFlash('debug', "User has roles: " . implode(', ', $user->getRoles()) . " - Not creating ownership.");
+            }
+        } else {
+            $this->addFlash('debug', "No user authenticated - Skipping PackOwnership creation.");
+        }
     }
+
+    return $pack;
+}
 
     private function ensureFactionExists(string $factionCode, $entityManager): Faction
     {
