@@ -59,7 +59,6 @@ class CardImportController extends AbstractController
                     $this->processDuplicates($duplicates, $entityManager);
                 }
 
-                // Debug: Check collected cards
                 $this->addFlash('debug', 'Cards to link: ' . json_encode($cardsToLink));
 
                 $this->linkCardsBySuffix($cardsToLink, $entityManager);
@@ -81,7 +80,19 @@ class CardImportController extends AbstractController
         $pack = $entityManager->getRepository('AppBundle\\Entity\\Pack')
             ->findOneBy(['code' => $packCode]);
 
-        if (!$pack) {
+        if ($pack) {
+            // Pack exists, check ownership for ROLE_CREATOR
+            $user = $this->getUser();
+            if ($user && $this->isGranted('ROLE_CREATOR') && !$this->isGranted('ROLE_ADMIN')) {
+                $ownership = $entityManager->getRepository('AppBundle\\Entity\\PackOwnership')
+                    ->findOneBy(['user' => $user, 'pack' => $pack]);
+                if (!$ownership) {
+                    throw new \Exception("You do not have ownership of pack [$packCode] and cannot modify it.");
+                }
+            }
+            // ROLE_ADMIN can proceed without ownership check
+        } else {
+            // Pack doesn't exist, create it
             $pack = new Pack();
             $pack->setCode($packCode);
             $pack->setName($packCode);
@@ -90,7 +101,18 @@ class CardImportController extends AbstractController
             $pack->setDateCreation(new \DateTime());
             $pack->setDateUpdate(new \DateTime());
             $entityManager->persist($pack);
-            $entityManager->flush();
+            $entityManager->flush(); // Flush to assign an ID to the pack
+
+            // Link PackOwnership for ROLE_CREATOR
+            $user = $this->getUser();
+            if ($user && $this->isGranted('ROLE_CREATOR') && !$this->isGranted('ROLE_ADMIN')) {
+                $packOwnership = new PackOwnership();
+                $packOwnership->setUser($user);
+                $packOwnership->setPack($pack);
+                $entityManager->persist($packOwnership);
+                $entityManager->flush(); // Save the PackOwnership
+                $this->addFlash('info', "PackOwnership created for pack [$packCode] and user [{$user->getId()}]");
+            }
         }
 
         return $pack;

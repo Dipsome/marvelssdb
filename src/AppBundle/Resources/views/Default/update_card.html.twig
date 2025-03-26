@@ -1,9 +1,0 @@
-{% extends 'AppBundle::layout.html.twig' %}
-
-{% block body %}
-    <h1>Update Card: {{ card.code }}</h1>
-    {{ form_start(form) }}
-        {{ form_widget(form) }}
-        <button type="submit">Save</button>
-    {{ form_end(form) }}
-{% endblock %}
